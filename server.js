@@ -2,6 +2,8 @@ const express = require("express");
 const cors = require("cors");
 
 const app = express();
+
+// Use Render/Railway provided port or fallback to localhost
 const PORT = process.env.PORT || 8080;
 
 app.use(cors());
@@ -14,21 +16,17 @@ app.post("/heartbeat", (req, res) => {
         receivedAt: new Date().toISOString(),
         payload: req.body
     };
-
-    console.log("Heartbeat:", latestHeartbeat);
-
+    console.log("📩 Received Heartbeat:", latestHeartbeat);
     res.json({
         status: "success",
-        message: "Heartbeat received",
-        receivedData: req.body
+        message: "Heartbeat received successfully"
     });
 });
 
 app.get("/heartbeat/latest", (req, res) => {
-    res.json(latestHeartbeat || { message: "No data yet" });
+    res.json(latestHeartbeat || { status: "empty" });
 });
 
 app.listen(PORT, () => {
-    console.log(`🚀 Railway backend running on port ${PORT}`);
+    console.log(`🚀 Backend running on PORT ${PORT}`);
 });
-
