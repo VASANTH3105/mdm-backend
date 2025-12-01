@@ -11,8 +11,13 @@ app.use(express.json());
 
 let latestHeartbeat = null;
 
-// Helper to create readable time
-function formatReadableTime(date) {
+// Convert UTC time -> IST (+5:30)
+function convertToIST(utcDate) {
+    return new Date(utcDate.getTime() + 5.5 * 60 * 60 * 1000);
+}
+
+// Helper to create readable IST time
+function formatReadableIST(dateIST) {
     return new Intl.DateTimeFormat("en-IN", {
         day: "2-digit",
         month: "short",
@@ -21,18 +26,18 @@ function formatReadableTime(date) {
         minute: "2-digit",
         second: "2-digit",
         hour12: true
-    }).format(date);
+    }).format(dateIST);
 }
 
 app.post("/heartbeat", (req, res) => {
-
-    // Create server timestamp
-    const now = new Date();
+    const utcNow = new Date();
+    const istNow = convertToIST(utcNow);
 
     latestHeartbeat = {
-        receivedAt: now.toISOString(),  // server ISO time
-        readableTime: formatReadableTime(now), // readable server time
-        payload: req.body               // device data (unchanged)
+        receivedAtUTC: utcNow.toISOString(),     // Original UTC
+        receivedAtIST: istNow.toISOString(),     // ISO in IST
+        readableTime: formatReadableIST(istNow), // Human readable IST
+        payload: req.body
     };
 
     console.log("\n📩 Received Heartbeat:");
@@ -41,7 +46,7 @@ app.post("/heartbeat", (req, res) => {
     res.json({
         status: "success",
         message: "Heartbeat logged",
-        serverTime: latestHeartbeat.readableTime
+        serverTimeIST: latestHeartbeat.readableTime
     });
 });
 
