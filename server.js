@@ -1,9 +1,22 @@
 const express = require("express");
 const cors = require("cors");
+const admin = require("firebase-admin");
+
+// 1. Initialize Firebase (REQUIRED for Notifications)
+// Ensure 'firebase-admin-key.json' is in the same folder
+try {
+    const serviceAccount = require("./firebase-admin-key.json"); 
+    admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount)
+    });
+    console.log("✅ Firebase Initialized");
+} catch (e) {
+    console.error("❌ Firebase Init Failed:", e.message);
+}
 
 const app = express();
 
-// Render/Railway port or local
+// Render/Railway port or local 8080
 const PORT = process.env.PORT || 8080;
 
 app.use(cors());
@@ -13,9 +26,12 @@ app.use(express.json());
 // 1. IN-MEMORY STORAGE
 // ==========================================
 let latestHeartbeat = null;
+let deviceFcmToken = null; // Stores the phone's address
 
+// Default Configuration (The Command Center)
 let deviceConfig = {
-    launcherVisible: true  // true = Show App, false = Hide App
+    launcherVisible: true, // true = Show Icon, false = Hide Icon
+    lockDevice: false
 };
 
 // ==========================================
@@ -45,63 +61,105 @@ function formatReadableIST(utcDate) {
 // 3. DEVICE ROUTES
 // ==========================================
 
+// POST /heartbeat
+// App sends data -> Server saves Token -> Server responds with Config
 app.post("/heartbeat", (req, res) => {
-    const utcNow = new Date(); // The absolute current time (UTC)
-    
-    // 1. Create the Readable String using the REAL UTC time
-    const readable = formatReadableIST(utcNow);
+    const utcNow = new Date();
+    const body = req.body;
 
-    // 2. Create the Shifted Date object JUST for the ISO string
-    // (So the JSON looks like "2025-12-06T01:10...")
+    // 1. Capture the FCM Token if provided
+    if (body.fcmToken) {
+        if (deviceFcmToken !== body.fcmToken) {
+            console.log(`📲 New Device Token Registered: ${body.fcmToken.substring(0, 20)}...`);
+            deviceFcmToken = body.fcmToken;
+        }
+    }
+
+    // 2. Format Time
+    const readable = formatReadableIST(utcNow);
     const istShifted = getShiftedDate(utcNow);
 
     latestHeartbeat = {
         receivedAtUTC: utcNow.toISOString(),     
-        receivedAtIST: istShifted.toISOString().replace("Z", "+05:30"), // Corrected ISO string
+        receivedAtIST: istShifted.toISOString().replace("Z", "+05:30"),
         readableTime: readable,                  
-        payload: req.body
+        payload: body
     };
 
-    console.log(`\n📩 [${latestHeartbeat.readableTime}] Heartbeat Received`);
+    console.log(`\n📩 [${readable}] Heartbeat: Battery ${body.battery?.level}%`);
     
+    // 3. Respond with the COMMAND config
     res.json({
         status: "success",
-        message: "Heartbeat logged",
-        serverTimeIST: latestHeartbeat.readableTime,
-        config: deviceConfig 
+        message: "Heartbeat synced",
+        serverTimeIST: readable,
+        config: deviceConfig // <--- Critical: App reads this to Hide/Show icon
     });
 });
 
 // ==========================================
-// 4. DASHBOARD / ADMIN ROUTES
+// 4. ADMIN APIs
 // ==========================================
 
+// GET /heartbeat/latest
 app.get("/heartbeat/latest", (req, res) => {
-    res.json(latestHeartbeat || { status: "empty" });
+    res.json({ 
+        ...latestHeartbeat, 
+        currentConfig: deviceConfig, 
+        deviceToken: deviceFcmToken || "Not Registered"
+    });
 });
 
-app.get("/admin/config", (req, res) => {
-    res.json(deviceConfig);
-});
-
+// POST /admin/config
+// Usage: { "launcherVisible": false }
 app.post("/admin/config", (req, res) => {
-    const { launcherVisible } = req.body;
+    const { launcherVisible, lockDevice } = req.body;
 
-    if (typeof launcherVisible === 'boolean') {
-        deviceConfig.launcherVisible = launcherVisible;
-        console.log(`\n⚙️ Configuration Updated: Launcher is now ${launcherVisible ? 'VISIBLE' : 'HIDDEN'}`);
-    }
+    if (typeof launcherVisible === 'boolean') deviceConfig.launcherVisible = launcherVisible;
+    if (typeof lockDevice === 'boolean') deviceConfig.lockDevice = lockDevice;
+
+    console.log("\n⚙️  Admin Config Updated:", deviceConfig);
 
     res.json({
         status: "success",
-        message: "Config updated",
+        message: "Config updated. Device will apply on next heartbeat.",
         currentConfig: deviceConfig
     });
+});
+
+// POST /admin/notify
+// Usage: { "title": "Alert", "body": "Hello!" }
+app.post("/admin/notify", async (req, res) => {
+    const { title, body, command } = req.body;
+
+    if (!deviceFcmToken) {
+        return res.status(400).json({ error: "No device token. Wait for app heartbeat." });
+    }
+
+    const message = {
+        token: deviceFcmToken,
+        notification: {
+            title: title || "MDM Alert",
+            body: body || "Message from Admin"
+        },
+        data: {
+            command: command || "SYNC" 
+        }
+    };
+
+    try {
+        const response = await admin.messaging().send(message);
+        console.log("🚀 Notification sent successfully");
+        res.json({ status: "success", firebaseResponse: response });
+    } catch (error) {
+        console.error("🔥 Notification failed:", error);
+        res.status(500).json({ error: error.message });
+    }
 });
 
 // ==========================================
 // 5. START SERVER
 // ==========================================
-app.listen(PORT, () => {
-    console.log(`🚀 Backend running on PORT ${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+    console.log(`🚀 MDM Backend running on PORT ${PORT}`);
 });
